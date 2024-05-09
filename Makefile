@@ -9,12 +9,17 @@
 # http://www.eclipse.org/legal/epl-v10.html
 #
 
-SMC_TOOLS_RELEASE = 1.8.3
+SMC_TOOLS_RELEASE = 1.8.4
 VER_MAJOR         = $(shell echo $(SMC_TOOLS_RELEASE) | cut -d '.' -f 1)
 
 ARCHTYPE = $(shell uname -m)
 ARCH := $(shell getconf LONG_BIT)
 DISTRO := $(shell lsb_release -si 2>/dev/null)
+
+VMLINUX ?= $(wildcard /usr/lib/debug/usr/lib/modules/$(shell uname -r)/vmlinux)
+ifeq ($(VMLINUX),)
+VMLINUX = $(wildcard /boot/vmlinux-$(shell uname -r))
+endif
 
 ifneq ("${V}","1")
         MAKEFLAGS += --quiet
@@ -23,8 +28,10 @@ else
         cmd =
 endif
 CCC               = $(call cmd,"  CC      ",$@)${CC}
+CLANG 		 ?= clang
 LINK              = $(call cmd,"  LINK    ",$@)${CC}
 GEN               = $(call cmd,"  GEN     ",$@)sed
+BPFTOOL		 ?= bpftool
 DESTDIR          ?=
 PREFIX            = /usr
 BINDIR		  = ${PREFIX}/bin
@@ -58,7 +65,7 @@ LIBDIR		= ${PREFIX}/lib
 endif
 endif
 
-all: libsmc-preload.so libsmc-preload32.so smcd smcr smcss smc_pnet
+all: libsmc-preload.so libsmc-preload32.so smcd smcr smcss smc_pnet smc_run.bpf
 
 CFLAGS ?= -Wall -O3 -g
 ifneq ($(shell sh -c 'command -v pkg-config'),)
@@ -77,6 +84,18 @@ ifeq ($(ARCHTYPE),s390x)
 else
 	MACHINE_OPT32="-m32"
 endif
+
+vmlinux.h: ${VMLINUX}
+	${BPFTOOL} btf dump file ${VMLINUX} format c > $@
+
+smc_run.bpf.bpf.o: smc_run.bpf.bpf.c vmlinux.h
+	${CLANG} -O2 -target bpf -g -c  smc_run.bpf.bpf.c -o $@
+
+smc_run.bpf.skel.h: smc_run.bpf.bpf.o
+	${BPFTOOL} gen skeleton smc_run.bpf.bpf.o > $@
+
+smc_run.bpf.o: smc_run.bpf.c smc_run.bpf.skel.h
+	${CLANG} ${ALL_CFLAGS} -c smc_run.bpf.c
 
 util.o: util.c  util.h
 	${CCC} ${ALL_CFLAGS} -c util.c
@@ -140,6 +159,9 @@ smc_pnet: smc_pnet.c smctools_common.h
 smcss: smcss.o libnetlink.o
 	${CCC} ${ALL_CFLAGS} $^ ${ALL_LDFLAGS} -o $@
 
+smc_run.bpf: smc_run.bpf.o
+	${CLANG} $^ ${ALL_LDFLAGS} -lbpf -o $@
+
 install: all
 	echo "  INSTALL"
 	install -d -m755 $(DESTDIR)$(LIBDIR) $(DESTDIR)$(BINDIR) $(DESTDIR)$(MANDIR)/man7 \
@@ -150,6 +172,7 @@ install: all
 #	install $(INSTALL_FLAGS_LIB) libsmc-preload32.so $(DESTDIR)$(LIBDIR32)/libsmc-preload.so
 #endif
 	install $(INSTALL_FLAGS_BIN) smc_run $(DESTDIR)$(BINDIR)
+	install $(INSTALL_FLAGS_BIN) smc_run.bpf $(DESTDIR)$(BINDIR)
 	install $(INSTALL_FLAGS_BIN) smcd $(DESTDIR)$(BINDIR)
 	install $(INSTALL_FLAGS_BIN) smcr $(DESTDIR)$(BINDIR)
 	install $(INSTALL_FLAGS_BIN) smcss $(DESTDIR)$(BINDIR)
@@ -210,3 +233,4 @@ check:
 clean:
 	echo "  CLEAN"
 	rm -f *.o *.so *.a smc smcd smcr smcss smc_pnet
+	rm -f vmlinux.h smc_run.bpf.skel.h smc_run.bpf

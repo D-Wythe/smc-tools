@@ -79,6 +79,15 @@ export SMC_DEBUG;
 #
 # Execute the specified command.
 #
+
+smc_run.bpf -s load > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+	smc_run.bpf "$@"
+	exit $?;
+else
+	echo "smc_run: Try load eBPF prog failed, run with AF_SMC via LD_PRELOAD."
+fi
+
 export LD_PRELOAD=$LD_PRELOAD:$LIB_NAME;
 
 exec "$@"
